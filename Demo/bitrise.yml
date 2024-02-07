@@ -1,0 +1,160 @@
+format_version: "13"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+app:
+  envs:
+  - BITRISE_PROJECT_PATH: BullsEye.xcworkspace
+    opts:
+      is_expand: true
+      skip_if_empty: false
+      title: ""
+      description: ""
+      summary: ""
+      category: ""
+      is_required: false
+      is_dont_change_value: false
+      is_template: false
+      is_sensitive: false
+      unset: false
+  - BITRISE_SCHEME: BullsEye
+    opts:
+      is_expand: true
+      skip_if_empty: false
+      title: ""
+      description: ""
+      summary: ""
+      category: ""
+      is_required: false
+      is_dont_change_value: false
+      is_template: false
+      is_sensitive: false
+      unset: false
+meta:
+  bitrise.io:
+    machine_type_id: g2-m1.8core
+    stack: osx-xcode-15.2.x
+trigger_map:
+- pipeline: build_and_run_tests
+  pull_request_source_branch: '*'
+pipelines:
+  build_and_run_tests:
+    stages:
+    - build_tests: {}
+    - run_tests: {}
+    - deploy_test_results: {}
+    - send_notifications: {}
+stages:
+  build_tests:
+    should_always_run: true
+    workflows:
+    - xcode_build_for_test: {}
+  deploy_test_results:
+    workflows:
+    - merge_and_deploy_test_results: {}
+  run_tests:
+    abort_on_fail: true
+    workflows:
+    - run_ui_tests: {}
+    - run_unit_tests: {}
+  send_notifications:
+    workflows:
+    - send_slack_notification: {}
+workflows:
+  _pull_test_bundle:
+    steps:
+    - pull-intermediate-files@1:
+        inputs:
+        - artifact_sources: build_tests.xcode_build_for_test
+          opts: {}
+  merge_and_deploy_test_results:
+    steps:
+    - pull-intermediate-files@1:
+        inputs:
+        - artifact_sources: run_tests\..*
+          opts: {}
+    - script@1:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+
+            set -eo pipefail
+
+
+            for item in "${BITRISE_UI_TEST_XCRESULT_PATH}" "${BITRISE_UNIT_TEST_XCRESULT_PATH}";
+
+              do
+
+                echo "Exporting ${item}"
+
+
+                test_name=$(basename "$item" .xcresult)
+
+                echo "Test name: $test_name"
+
+
+                test_dir="${BITRISE_TEST_RESULT_DIR}/${test_name}"
+
+                mkdir -p "${test_dir}"
+
+                echo "Moving test result to: ${test_dir}"
+
+                cp -R "${item}" "${test_dir}/$(basename ${item})"
+
+
+                test_info="${test_dir}/test-info.json"
+
+                echo "Creating Test info at: ${test_info}"
+
+                echo "{ "test-name": "${test_name}" }" > "$test_info"
+
+              done
+          opts: {}
+    - deploy-to-bitrise-io@2: {}
+  run_ui_tests:
+    before_run:
+    - _pull_test_bundle
+    steps:
+    - xcode-test-without-building@0:
+        inputs:
+        - opts: {}
+          xctestrun: $BITRISE_TEST_BUNDLE_PATH/BullsEye_UnitTests_iphonesimulator15.2-arm64-x86_64.xctestrun
+        - destination: platform=iOS Simulator,name=iPhone 12 Pro Max
+          opts: {}
+    - deploy-to-bitrise-io@2:
+        inputs:
+        - opts: {}
+          pipeline_intermediate_files: $BITRISE_XCRESULT_PATH:BITRISE_UNIT_TEST_XCRESULT_PATH
+  run_unit_tests:
+    before_run:
+    - _pull_test_bundle
+    steps:
+    - '@0':
+        inputs:
+        - opts: {}
+          xctestrun: $BITRISE_TEST_BUNDLE_PATH/BullsEye_UnitTests_iphonesimulator15.2-arm64-x86_64.xctestrun
+        - destination: platform=iOS Simulator,name=iPhone 12 Pro Max
+          opts: {}
+    - deploy-to-bitrise-io@2:
+        inputs:
+        - opts: {}
+          pipeline_intermediate_files: $BITRISE_XCRESULT_PATH:BITRISE_UNIT_TEST_XCRESULT_PATH
+  send_slack_notification:
+    steps:
+    - slack@3: {}
+  xcode_build_for_test:
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@8: {}
+    - xcode-build-for-test@2:
+        inputs:
+        - destination: generic/platform=iOS Simulator
+          opts: {}
+    - share-pipeline-variable@1:
+        run_if: .IsCI
+        inputs:
+        - opts: {}
+          variables: TEST_BUNDLE_ZIP_PATH=$BITRISE_TEST_BUNDLE_ZIP_PATH
+    - deploy-to-bitrise-io@2:
+        inputs:
+        - opts: {}
+          pipeline_intermediate_files: $BITRISE_TEST_BUNDLE_PATH:BITRISE_TEST_BUNDLE_PATH
